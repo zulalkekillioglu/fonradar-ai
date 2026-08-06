@@ -219,3 +219,4 @@ __marimo__/
 
 # API Keys and Environment Variables
 .env
+chroma_db_data/
