@@ -42,7 +42,7 @@ HEADERS = {
 # CACHE_FILE artik bu dosyanin konumuna sabit (cwd'ye gore kaymaz)
 _BU_DIZIN = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(_BU_DIZIN, "fonlar.json")
-CACHE_TTL_HOURS = 1      # Verinin gecerlilik suresi (12 saat)
+CACHE_TTL_HOURS = 12      # Verinin gecerlilik suresi (12 saat)
 
 session = requests.Session()
 session.headers.update(HEADERS)
