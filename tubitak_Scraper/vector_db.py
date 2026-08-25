@@ -10,21 +10,13 @@ import re
 import time
 import chromadb
 from chromadb.utils import embedding_functions
-
-# app/services/scraper.py içindeki fonksiyonu import ediyoruz
 from tubitak_Scraper.scraper import fonlari_getir
 
-# ==========================================
-# DOSYA YOLU AYARLARI (GÜVENLİ PATH)
-# ==========================================
-# Kodun çalıştığı dizini dinamik olarak al
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "chroma_db_data")
 SYNC_FILE = os.path.join(DB_PATH, ".sync_time")
 
-# ==========================================
-# METİN TEMİZLEME VE PARÇALAMA (CHUNKING)
-# ==========================================
 
 def clean_text(text: str) -> str:
     """Gereksiz boşlukları ve alt satır kargaşalarını temizler."""
@@ -56,9 +48,6 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
     return chunks
 
 
-# ==========================================
-# JSON YOLUNU BULMA
-# ==========================================
 
 def _bul_json(dosya_adi: str = "fonlar.json") -> str:
     """
@@ -76,9 +65,6 @@ def _bul_json(dosya_adi: str = "fonlar.json") -> str:
     return dosya_adi
 
 
-# ==========================================
-# VEKTÖR VERİTABANI (CHROMADB) VE EMBEDDING
-# ==========================================
 
 def build_vector_db(force_reindex: bool = False):
     """
@@ -208,7 +194,7 @@ def ara(query_text: str, k: int = 5):
     return collection.query(query_texts=[query_text], n_results=k)
 
 
-def semantic_search(collection, query_text: str, n_results: int = 3):
+'''def semantic_search(collection, query_text: str, n_results: int = 3):
     """
     Kullanıcı sorgusuna en yakın sonuçları vektör benzerliğiyle getirir.
     """
@@ -259,4 +245,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()'''

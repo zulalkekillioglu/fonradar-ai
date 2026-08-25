@@ -1,22 +1,3 @@
-"""
-FonRadar AI - TUBITAK Fon Kazima Modulu
-========================================
-Tek dosya, ayri ayri fonksiyonlar:
-
-  1) get_fund_links(list_url)  -> Liste sayfasindan fon (ilan) detay linklerini toplar.
-  2) extract_pdf_text(pdf_url) -> Bir PDF linkini indirip icindeki metni cikarir.
-  3) scrape_detail(url)        -> Detay sayfasina girer; metni + ek PDF'leri okur,
-                                  hepsini tek "full_text" alaninda birlestirir.
-  4) fonlari_getir()           -> Cache kontrolu + kazima. API'den DE bu cagrilir.
-  5) main()                    -> Komut satirindan elle calistirmak icin (thin wrapper).
-
-Kullanilan (hepsi ucretsiz/acik kaynak): requests, beautifulsoup4, pdfplumber
-Kurulum:  pip install requests beautifulsoup4 pdfplumber
-
-NOT (robots.txt): /tr/destekler yollari serbest, Crawl-delay yok. Yine de sunucuyu
-yormamak icin istekler arasi POLITE_DELAY saniye bekliyoruz.
-"""
-
 import io
 import json
 import os
@@ -33,6 +14,11 @@ from bs4 import BeautifulSoup
 
 BASE = "https://tubitak.gov.tr"
 LIST_URL = "https://tubitak.gov.tr/tr/destekler/sanayi/ulusal-destek-programlari"
+
+# YENİ: esnafkoop.ticaret.gov.tr duyurular kaynagi
+ESNAF_BASE = "https://esnafkoop.ticaret.gov.tr"
+ESNAF_LIST_URL = f"{ESNAF_BASE}/duyurular"
+
 POLITE_DELAY = 1           # istekler arasi bekleme banlanmamak icin
 TIMEOUT = 30               # istek zaman asimi
 HEADERS = {
@@ -48,36 +34,57 @@ session = requests.Session()
 session.headers.update(HEADERS)
 
 
-_robot_parser = None
-_robot_denendi = False   # "okuma denendi mi" sorusu, "parser hazir mi"dan AYRI tutuluyor
+_robot_parcalari: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+_robot_denenenler: set[str] = set()
 
 
-def robots_izin_var_mi(url: str) -> bool:
-    """
-    robots.txt kontrolu.
-    DUZELTME: Eskiden read() SSL/ag hatasi verince _robot_parser 'yarim' (bos)
-    bir nesne olarak kalip sonraki TUM URL'lere False donuyordu (ilk hata
-    dogru islense de, 2. ve sonraki URL'ler yanlislikla yasaklaniyordu).
-    Simdi: okuma SADECE bir kez denenir (_robot_denendi), _robot_parser ise
-    yalnizca BASARILI olursa atanir. Basarisizsa None kalir ve fonksiyon
-    HER ZAMAN True doner (izin verilir) - internete tekrar gidilmeden.
-    """
-    global _robot_parser, _robot_denendi
-    if not _robot_denendi:
-        _robot_denendi = True
+'''def robots_izin_var_mi(url: str) -> bool:
+    """Domain bazli robots.txt kontrolu (birden fazla siteyi destekler)."""
+    domain = urlparse(url).netloc
+    if domain not in _robot_denenenler:
+        _robot_denenenler.add(domain)
         parser = urllib.robotparser.RobotFileParser()
-        parser.set_url(urljoin(BASE, "/robots.txt"))
+        parser.set_url(f"https://{domain}/robots.txt")
         try:
             parser.read()
-            _robot_parser = parser   # SADECE basarili olursa ata
+            _robot_parcalari[domain] = parser   # SADECE basarili olursa ata
         except Exception as e:
-            print(f"[ROBOTS] robots.txt okunamadi, izin veriliyor: {e}")
-            # _robot_parser None kalir
+            print(f"[ROBOTS] {domain} robots.txt okunamadi, izin veriliyor: {e}")
+            _robot_parcalari[domain] = None
 
-    if _robot_parser is None:
+    parser = _robot_parcalari.get(domain)
+    if parser is None:
         return True
-    return _robot_parser.can_fetch("*", url)
+    return parser.can_fetch("*", url)'''
 
+def robots_izin_var_mi(url: str) -> bool:
+    """Domain bazli robots.txt kontrolu (birden fazla siteyi destekler)."""
+    domain = urlparse(url).netloc
+    if domain not in _robot_denenenler:
+        _robot_denenenler.add(domain)
+        parser = urllib.robotparser.RobotFileParser()
+        parser.set_url(f"https://{domain}/robots.txt")
+
+        try:
+            resp = requests.get(
+                f"https://{domain}/robots.txt",
+                headers=HEADERS,
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                parser.parse(resp.text.splitlines())
+                _robot_parcalari[domain] = parser
+            else:
+                print(f"[ROBOTS] {domain} robots.txt {resp.status_code} dondu, izin veriliyor.")
+                _robot_parcalari[domain] = None
+        except Exception as e:
+            print(f"[ROBOTS] {domain} robots.txt okunamadi, izin veriliyor: {e}")
+            _robot_parcalari[domain] = None
+
+    parser = _robot_parcalari.get(domain)
+    if parser is None:
+        return True
+    return parser.can_fetch("*", url)
 
 def nazik_get(url: str) -> requests.Response | None:
     """Bekleme + hata yonetimi ile GET. robots yasakliysa atlar."""
@@ -92,6 +99,7 @@ def nazik_get(url: str) -> requests.Response | None:
     except requests.RequestException as e:
         print(f"[HATA] Alinamadi: {url} -> {e}")
         return None
+
 
 
 def get_fund_links(list_url: str = LIST_URL) -> list[str]:
@@ -146,8 +154,8 @@ def extract_pdf_text(pdf_url: str) -> str:
 
 def scrape_detail(url: str) -> dict:
     """
-    Detay sayfasindan basligi, sayfa metnini ve ekli PDF'lerin metnini toplar,
-    hepsini birlestirip tek bir sozluk (record) olarak dondurur.
+    TUBITAK detay sayfasindan basligi, sayfa metnini ve ekli PDF'lerin metnini
+    toplar, hepsini birlestirip tek bir sozluk (record) olarak dondurur.
     """
     resp = nazik_get(url)
     if resp is None:
@@ -169,9 +177,7 @@ def scrape_detail(url: str) -> dict:
         sayfa_metni = ""
 
     # --- Ekli PDF linkleri ---
-    # DUZELTME: eskiden 'soup' (TUM sayfa: nav/header/footer dahil) taraniyordu,
-    # oysa sayfa_metni 'ana'ya (temizlenmis ana icerik) gore aliniyordu -> tutarsizdi.
-    # Simdi PDF linkleri de 'ana' kapsaminda toplaniyor, sayfa_metni ile tutarli.
+    # PDF linkleri de 'ana' kapsaminda toplaniyor, sayfa_metni ile tutarli.
     pdf_linkleri = []
     if ana:
         for a in ana.find_all("a", href=True):
@@ -195,9 +201,120 @@ def scrape_detail(url: str) -> dict:
         "sayfa_metni": sayfa_metni,
         "pdf_linkleri": pdf_linkleri,
         "full_text": full_text,   # ileride AI temizleme / kunye cikarimi icin
+        "kaynak": "tubitak",
     }
 
 
+
+
+def get_esnaf_duyuru_items(list_url: str = ESNAF_LIST_URL) -> list[dict]:
+    """
+    esnafkoop duyurular listesinden {"baslik", "url"} ciftlerini toplar.
+    Baslik ZATEN liste sayfasinda oldugu icin, LLM siniflandirmasi icin
+    detay sayfasina gitmeye gerek yok (gereksiz istek atilmiyor).
+    """
+    resp = nazik_get(list_url)
+    if resp is None:
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    ana = soup.find("main") or soup.find("article") or soup.body
+    items: list[dict] = []
+    gorulen: set[str] = set()
+
+    if ana:
+        for a in ana.find_all("a", href=True):
+            tam = urljoin(ESNAF_BASE, a["href"]).split("#")[0]
+            if "/duyurular/" in tam and tam != list_url and tam not in gorulen:
+                baslik = a.get_text(strip=True)
+                if baslik:
+                    gorulen.add(tam)
+                    items.append({"baslik": baslik, "url": tam})
+
+    print(f"[ESNAFKOOP] {len(items)} adet duyuru basligi bulundu.")
+    return items
+
+
+def scrape_esnaf_detail(url: str) -> dict:
+    """
+    esnafkoop detay sayfasini kazir; TUBITAK scrape_detail ile AYNI semayi
+    ('url','baslik','sayfa_metni','pdf_linkleri','full_text') dondurur ki
+    downstream (vector_db, skorlama) hicbir degisiklik gerektirmesin.
+    """
+    resp = nazik_get(url)
+    if resp is None:
+        return {}
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    h1 = soup.find("h1") or soup.find("h2")
+    baslik = h1.get_text(strip=True) if h1 else ""
+
+    ana = soup.find("main") or soup.find("article") or soup.body
+    if ana:
+        for etiket in ana.find_all(["nav", "header", "footer", "script", "style"]):
+            etiket.decompose()
+        sayfa_metni = ana.get_text(separator="\n", strip=True)
+    else:
+        sayfa_metni = ""
+
+    pdf_linkleri = []
+    if ana:
+        for a in ana.find_all("a", href=True):
+            tam = urljoin(ESNAF_BASE, a["href"])
+            if tam.lower().endswith(".pdf") and tam not in pdf_linkleri:
+                pdf_linkleri.append(tam)
+
+    pdf_metinleri = []
+    for pdf_url in pdf_linkleri:
+        print(f"    -> PDF isleniyor: {pdf_url}")
+        metin = extract_pdf_text(pdf_url)
+        if metin:
+            pdf_metinleri.append(f"\n\n[PDF: {pdf_url}]\n{metin}")
+
+    full_text = sayfa_metni + "".join(pdf_metinleri)
+
+    return {
+        "url": url,
+        "baslik": baslik,
+        "sayfa_metni": sayfa_metni,
+        "pdf_linkleri": pdf_linkleri,
+        "full_text": full_text,
+        "kaynak": "esnafkoop",
+    }
+
+
+def esnafkoop_fonlarini_getir() -> list[dict]:
+    """
+    esnafkoop duyurularini ceker, ONCE LLM ile fon/degil diye ayiklar,
+    SADECE fon/hibe/destek olanlarin detay+PDF metnini kazir.
+    """
+    from llm.duyuru_filtre import fon_olanlari_ayikla  # dongusel importu onlemek icin lazy import
+
+    duyurular = get_esnaf_duyuru_items()
+    if not duyurular:
+        return []
+
+    print(f"[ESNAFKOOP] {len(duyurular)} duyuru LLM'e siniflandirma icin gonderiliyor...")
+    fon_duyurulari = fon_olanlari_ayikla(duyurular)
+    print(f"[ESNAFKOOP] {len(fon_duyurulari)}/{len(duyurular)} duyuru FON olarak isaretlendi, detaylari kaziniyor.")
+
+    kayitlar = []
+    for i, d in enumerate(fon_duyurulari, 1):
+        print(f"[ESNAFKOOP {i}/{len(fon_duyurulari)}] {d['url']}")
+        try:
+            kayit = scrape_esnaf_detail(d["url"])
+            if kayit:
+                kayitlar.append(kayit)
+        except Exception as e:
+            print(f"[HATA] Atlandi: {d['url']} -> {e}")
+
+    return kayitlar
+
+
+# ==========================================
+# CACHE + BIRLESTIRME
+# ==========================================
 
 def onbellek_taze_mi() -> bool:
     """CACHE_FILE var mi ve CACHE_TTL_HOURS icinde mi?"""
@@ -217,7 +334,7 @@ def fonlari_getir(force_refresh: bool = False) -> list[dict]:
     """
     Fonlari dondurur.
       - Onbellek tazeyse: dosyadan okur, siteyi hic yormaz.
-      - Degilse: siteyi kazir, onbellegi gunceller.
+      - Degilse: HER IKI kaynagi (TUBITAK + esnafkoop) kazir, onbellegi gunceller.
     API'den de bu fonksiyon cagrilir (main degil).
     force_refresh=True dersen cache'i yok sayip zorla yeniden kazir.
     """
@@ -236,12 +353,14 @@ def fonlari_getir(force_refresh: bool = False) -> list[dict]:
         print(f"[BASARILI] Yerel dosyadan {len(kayitlar)} kayit yuklendi.")
         return kayitlar
 
-    # CACHE YOK/ESKI -> WEB'DEN KAZI
+    # CACHE YOK/ESKI -> WEB'DEN KAZI (IKI KAYNAK)
     print("[CACHE MISS] Onbellek yok/eski (>12 saat) -> siteden yeniden cekilecek.")
     print("[SCRAPING] Onbellek yok veya suresi dolmus. Siteden yeni veri cekiliyor...")
-    kayitlar = []
-    linkler = get_fund_links(LIST_URL)
 
+    kayitlar = []
+
+    # --- A) TUBITAK ---
+    linkler = get_fund_links(LIST_URL)
     for i, link in enumerate(linkler, 1):
         print(f"[{i}/{len(linkler)}] {link}")
         try:
@@ -251,6 +370,13 @@ def fonlari_getir(force_refresh: bool = False) -> list[dict]:
         except Exception as e:
             # Bir ilan bozuksa tumunu cokertme, sadece onu atla
             print(f"[HATA] Atlandi: {link} -> {e}")
+
+    # --- B) ESNAFKOOP (YENİ) --- LLM ile fon olmayanlar elenir
+    try:
+        esnaf_kayitlari = esnafkoop_fonlarini_getir()
+        kayitlar.extend(esnaf_kayitlari)
+    except Exception as e:
+        print(f"[UYARI] esnafkoop kazima basarisiz, TUBITAK verisiyle devam ediliyor: {e}")
 
     # BOS SONUC ESKI VERIYI EZMESIN
     if kayitlar:

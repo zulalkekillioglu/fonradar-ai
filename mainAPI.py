@@ -60,61 +60,6 @@ def _arka_plan_yenileme():
 def home():
     return {"status": "online", "message": "FonRadar AI calisiyor"}
 
-'''
-@app.get("/match-score")
-def ara_endpoint(sorgu: str, background_tasks: BackgroundTasks):
-    """
-    Fonlari arar + skorlar, sonucu JSON doner. Kullaniciyi BEKLETMEZ.
-    Veri eskiyse arka planda tazeleme baslatir; cevap yine hemen doner.
-    """
-    baslangic = time.time()
-
-    user_prompt = f"""Aşağıdaki kurum bilgilerine göre mevcut fonları değerlendir ve kurumun şehir talebi varsa bunu da göz önünde bulundur:
-    {sorgu}
-    """
-
-    # 1) Veri eski mi? (ucuz kontrol) -> eskiyse arka plana yenileme at, ama BEKLEME
-    veri_eski = not onbellek_taze_mi()
-    guncelleniyor = False
-    if veri_eski:
-        if _yenileme_baslat_gerekli_mi():
-            background_tasks.add_task(_arka_plan_yenileme)
-        guncelleniyor = True  # ya bu istek baslatti ya da zaten suruyor
-
-    # 2) MEVCUT Chroma ile hemen ara + skorla (kazimayi beklemeden)
-    fonlar = skorlanacak_fonlar(sorgu, limit=5)
-
-    if not fonlar:
-        # Elde hic veri yok (ilk kurulum). Yoksa yenilemeyi baslat.
-        if not guncelleniyor and _yenileme_baslat_gerekli_mi():
-            background_tasks.add_task(_arka_plan_yenileme)
-            guncelleniyor = True
-        cevap = {
-            "durum": "hazirlaniyor" if guncelleniyor else "veri_yok",
-            "guncelleniyor": guncelleniyor,
-            "mesaj": ("Henuz veri yok, arka planda hazirlaniyor. "
-                      "Lutfen birkac dakika sonra tekrar deneyin.")
-            if guncelleniyor else "Uygun fon bulunamadi.",
-            "sonuclar": [],
-        }
-    else:
-        sonuclar = fonlari_skorla(fonlar, user_prompt)
-        cevap = {
-            "durum": "basarili",
-            "guncelleniyor": guncelleniyor,  # True ise arka planda yeni veri hazirlaniyor
-            "mesaj": ("Sonuclar mevcut veriden dondu. Yeni veri arka planda "
-                      "hazirlaniyor; birazdan guncellenecek.")
-            if guncelleniyor else "Sonuclar guncel veriden.",
-            "sonuclar": sonuclar,
-        }
-
-    # Konsola sure bilgisi (kullaniciyi bekleten kazima BURADA degil, arka planda)
-    gecen = round(time.time() - baslangic, 2)
-    print(f"[/ara] '{sorgu}' -> {len(cevap['sonuclar'])} sonuc, {gecen} sn "
-          f"(guncelleniyor={guncelleniyor})")
-
-    return cevap
-'''
 
 @app.get("/match-score")
 def ara_endpoint(sorgu: str, background_tasks: BackgroundTasks):
@@ -133,7 +78,7 @@ def ara_endpoint(sorgu: str, background_tasks: BackgroundTasks):
         guncelleniyor = True
 
     # 2) MEVCUT Chroma ile hemen ara
-    fonlar = skorlanacak_fonlar(sorgu, limit=5)
+    fonlar = skorlanacak_fonlar(sorgu, limit=10)
 
     if not fonlar:
         if not guncelleniyor and _yenileme_baslat_gerekli_mi():

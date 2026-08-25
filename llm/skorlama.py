@@ -18,6 +18,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from llm.llm import get_llm
 import time
+from datetime import date
 from tenacity import retry, stop_after_attempt, wait_random_exponential, RetryError
 
 MAKS_KARAKTER = 15000
@@ -51,8 +52,14 @@ class FonSkoru(BaseModel):
         default=None,
         description="Fonun hibe/destek orani veya bütce limiti (metinde acikca varsa yazilir, yoksa null)",
     )
+    suresi_gecti: bool = Field(
+        default=False,
+        description="Sana verilen BUGUNUN_TARIHI, son_basvuru tarihinden SONRAYSA true; son_basvuru yoksa veya gecmemisse false"
+    )
 
 PROMPT_SABLONU = """Sen uzman bir hibe ve fon analistisin. Kullanıcının ihtiyacı ile sana sağlanan fon metnini kıyaslayıp dinamik, esnek ve son derece hassas bir uygunluk değerlendirmesi yapacaksın.
+
+BUGUNUN_TARIHI: {bugun}
 
 KULLANICI SORGUSU:
 {sorgu}
@@ -93,7 +100,10 @@ DETAYLI ALAN KURALLARI:
 4. konu: Fonun metinden çıkarılan ana odağı/konusu (kısa ve öz, maks 4-5 kelime).
 5. son_basvuru: Metinde GERÇEKTEN geçen son başvuru tarihi (Format varsa: DD.MM.YYYY veya metindeki halı), yoksa null.
 6. hibe_orani: Metinde GERÇEKTEN geçen hibe oranı veya bütçe limiti, yoksa null.
-
+7. suresi_gecti: BUGUNUN_TARIHI ile son_basvuru tarihini KARŞILAŞTIR.
+   - son_basvuru metinde varsa VE bugünün tarihi son_basvuru tarihinden SONRAYSA (yıl-ay-gün bazlı) -> true
+   - son_basvuru yoksa (null) VEYA henüz geçmemişse -> false
+   - Sadece YIL ve AY bazlı kaba karşılaştırma yeterli, gün hassasiyeti gerekmez.
 ÇIKTI KISITLAMALARI (ÇOK KRİTİK):
 - Yanıtlarında yalnızca sağlanan metindeki gerçek verilere dayan, asla dışarıdan varsayımda bulunma.
 - Markdown bloğu (```json ... ``` veya ```), açıklama, giriş veya sonuç yazısı KESİNLİKLE KULLANMA.
@@ -107,8 +117,10 @@ JSON Formatı:
   "sehir_durumu": "ulusal",
   "konu": "Yapay Zeka ve Yazılım",
   "son_basvuru": null,
-  "hibe_orani": "%75"
+  "hibe_orani": "%75",
+  "suresi_gecti": false
 }}
+
 """
 
 _yapili_llm = None
@@ -136,8 +148,10 @@ def fonu_skorla(fon: dict, sorgu: str) -> FonSkoru:
         sorgu=sorgu.strip(),
         baslik=fon.get("baslik", ""),
         metin=_metni_hazirla(fon),
+        bugun=date.today().strftime("%d.%m.%Y"),   # YENİ: sunucu tarihi HER cagrida taze hesaplanir
     )
     return _get_yapili_llm().invoke(prompt)
+
 
 
 def fonlari_skorla(fonlar: list[dict], sorgu: str) -> list[dict]:
@@ -148,14 +162,17 @@ def fonlari_skorla(fonlar: list[dict], sorgu: str) -> list[dict]:
 
         try:
             skor = fonu_skorla(fon, sorgu)
-            sonuclar.append({
-                **skor.model_dump(),
-                "baslik": baslik,
-                "url": fon.get("url"),
-            })
 
-            # HER FON SKORLANDIKTAN SONRA 10 SANİYE BEKLE
-            # Böylece 1 dakikalık token limitini doldurmamış oluruz
+            # YENİ: son basvuru tarihi gecmis fonlar sonuca HIC eklenmiyor
+            if skor.suresi_gecti:
+                print(f"  ⏰ [SÜRESİ GEÇMİŞ] Atlandi: {baslik} (son_basvuru: {skor.son_basvuru})")
+            else:
+                sonuclar.append({
+                    **skor.model_dump(),
+                    "baslik": baslik,
+                    "url": fon.get("url"),
+                })
+
             if i < len(fonlar):
                 print("⏳ Token limitini aşmamak için 10 saniye bekleniyor...")
                 time.sleep(10)
@@ -163,7 +180,6 @@ def fonlari_skorla(fonlar: list[dict], sorgu: str) -> list[dict]:
         except RetryError as e:
             gercek_hata = e.last_attempt.exception()
             print(f"\n🚨 [API HATASI YAKALANDI] - {baslik} : {e}\n ")
-            # ... (loglama kısımlarınız aynı kalsın)
             raise
 
         except Exception as e:
